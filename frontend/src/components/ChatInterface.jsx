@@ -1,145 +1,147 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import Stage1 from './Stage1';
-import Stage2 from './Stage2';
-import Stage3 from './Stage3';
-import './ChatInterface.css';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { Send } from 'lucide-react';
 
-export default function ChatInterface({
-  conversation,
-  onSendMessage,
-  isLoading,
-}) {
+const CodeBlock = ({ children, className }) => {
+  const match = /language-(\w+)/.exec(className || '');
+  const language = match ? match[1] : '';
+
+  return (
+    <SyntaxHighlighter
+      style={oneDark}
+      language={language}
+      PreTag="div"
+      customStyle={{
+        margin: '1em 0',
+        borderRadius: '8px',
+        fontSize: '0.875em',
+      }}
+    >
+      {String(children).replace(/\n$/, '')}
+    </SyntaxHighlighter>
+  );
+};
+
+export default function ChatInterface({ conversation, onSendMessage, isLoading }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const messages = conversation?.messages || [];
 
   useEffect(() => {
-    scrollToBottom();
-  }, [conversation]);
+    if (messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
+    }
+  }, [input]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
       onSendMessage(input);
       setInput('');
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
     }
   };
 
   const handleKeyDown = (e) => {
-    // Submit on Enter (without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
   };
 
-  if (!conversation) {
-    return (
-      <div className="chat-interface">
-        <div className="empty-state">
-          <h2>Welcome to LLM Council</h2>
-          <p>Create a new conversation to get started</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="chat-interface">
       <div className="messages-container">
-        {conversation.messages.length === 0 ? (
-          <div className="empty-state">
-            <h2>Start a conversation</h2>
-            <p>Ask a question to consult the LLM Council</p>
-          </div>
-        ) : (
-          conversation.messages.map((msg, index) => (
-            <div key={index} className="message-group">
-              {msg.role === 'user' ? (
-                <div className="user-message">
-                  <div className="message-label">You</div>
-                  <div className="message-content">
-                    <div className="markdown-content">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+        <div className="messages-inner">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <h2>Start a conversation</h2>
+              <p>Ask a question to consult the LLM Council</p>
+            </div>
+          ) : (
+            messages.map((msg, index) => (
+              <div key={index} className="message-group">
+                {msg.role === 'user' ? (
+                  <div className="user-message">
+                    <div className="user-bubble">
+                      <ReactMarkdown>{msg.content || ''}</ReactMarkdown>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="assistant-message">
-                  <div className="message-label">LLM Council</div>
-
-                  {/* Stage 1 */}
-                  {msg.loading?.stage1 && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 1: Collecting individual responses...</span>
-                    </div>
-                  )}
-                  {msg.stage1 && <Stage1 responses={msg.stage1} />}
-
-                  {/* Stage 2 */}
-                  {msg.loading?.stage2 && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 2: Peer rankings...</span>
-                    </div>
-                  )}
-                  {msg.stage2 && (
-                    <Stage2
-                      rankings={msg.stage2}
-                      labelToModel={msg.metadata?.label_to_model}
-                      aggregateRankings={msg.metadata?.aggregate_rankings}
-                    />
-                  )}
-
-                  {/* Stage 3 */}
-                  {msg.loading?.stage3 && (
-                    <div className="stage-loading">
-                      <div className="spinner"></div>
-                      <span>Running Stage 3: Final synthesis...</span>
-                    </div>
-                  )}
-                  {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
-                </div>
-              )}
-            </div>
-          ))
-        )}
-
-        {isLoading && (
-          <div className="loading-indicator">
-            <div className="spinner"></div>
-            <span>Consulting the council...</span>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
+                ) : (
+                  <div className="assistant-message">
+                    {msg.loading?.stage1 && (
+                      <div className="stage-loading">
+                        <div className="spinner"></div>
+                        <span>Collecting expert opinions...</span>
+                      </div>
+                    )}
+                    {msg.loading?.stage2 && (
+                      <div className="stage-loading">
+                        <div className="spinner"></div>
+                        <span>Cross-examining responses...</span>
+                      </div>
+                    )}
+                    {msg.loading?.stage3 && (
+                      <div className="stage-loading">
+                        <div className="spinner"></div>
+                        <span>Synthesizing final consensus...</span>
+                      </div>
+                    )}
+                    {msg.stage3?.response && (
+                      <div className="assistant-content">
+                        <ReactMarkdown
+                          components={{
+                            code({ node, inline, className, children, ...props }) {
+                              if (inline) {
+                                return <code className={className} {...props}>{children}</code>;
+                              }
+                              return <CodeBlock className={className}>{children}</CodeBlock>;
+                            }
+                          }}
+                        >
+                          {msg.stage3.response}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      {conversation.messages.length === 0 && (
-        <form className="input-form" onSubmit={handleSubmit}>
+      <div className="input-area">
+        <form className="input-container" onSubmit={handleSubmit}>
           <textarea
+            ref={textareaRef}
             className="message-input"
-            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+            placeholder="Ask your question..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={isLoading}
-            rows={3}
+            rows={1}
           />
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim() || isLoading}
-          >
-            Send
+          <button type="submit" className="send-btn" disabled={!input.trim() || isLoading}>
+            {isLoading ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }}></div> : <Send size={16} />}
           </button>
         </form>
-      )}
+      </div>
     </div>
   );
 }

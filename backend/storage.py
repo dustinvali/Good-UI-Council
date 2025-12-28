@@ -8,6 +8,10 @@ from pathlib import Path
 from .config import DATA_DIR
 
 
+# In-memory storage for new, empty conversations
+_pending_conversations: Dict[str, Any] = {}
+
+
 def ensure_data_dir():
     """Ensure the data directory exists."""
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
@@ -37,10 +41,9 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "messages": []
     }
 
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    # Store in pending memory only
+    # File will be created only when first message is added/saved
+    _pending_conversations[conversation_id] = conversation
 
     return conversation
 
@@ -57,11 +60,17 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     """
     path = get_conversation_path(conversation_id)
 
-    if not os.path.exists(path):
-        return None
-
-    with open(path, 'r') as f:
-        return json.load(f)
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return json.load(f)
+            
+    # Check pending conversations
+    if conversation_id in _pending_conversations:
+        # Return a copy to avoid mutation issues if we were strict,
+        # but here we want to modify the same object until saved.
+        return _pending_conversations[conversation_id]
+        
+    return None
 
 
 def save_conversation(conversation: Dict[str, Any]):
@@ -76,6 +85,9 @@ def save_conversation(conversation: Dict[str, Any]):
     path = get_conversation_path(conversation['id'])
     with open(path, 'w') as f:
         json.dump(conversation, f, indent=2)
+        
+    # Remove from pending if it exists, as it's now persisted
+    _pending_conversations.pop(conversation['id'], None)
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -170,3 +182,39 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+def delete_conversation(conversation_id: str):
+    """
+    Delete a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+    """
+    path = get_conversation_path(conversation_id)
+    if os.path.exists(path):
+        os.remove(path)
+        
+    # Also remove from pending if present
+    _pending_conversations.pop(conversation_id, None)
+
+
+def delete_empty_conversations():
+    """
+    Delete all conversations that have no messages.
+    """
+    ensure_data_dir()
+    
+    for filename in os.listdir(DATA_DIR):
+        if filename.endswith('.json'):
+            path = os.path.join(DATA_DIR, filename)
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                
+                # Check if messages list is empty
+                if not data.get("messages", []):
+                    os.remove(path)
+            except (json.JSONDecodeError, OSError):
+                # If file is corrupted or can't be read, ignore
+                pass
