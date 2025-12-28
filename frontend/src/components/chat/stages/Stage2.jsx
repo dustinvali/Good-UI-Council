@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { cn } from '../lib/utils';
+import { cn } from '../../../lib/utils';
 
 function deAnonymizeText(text, labelToModel) {
   if (!labelToModel) return text;
@@ -59,20 +59,20 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
         </div>
 
         {rankings[activeTab].parsed_ranking &&
-         rankings[activeTab].parsed_ranking.length > 0 && (
-          <div className="border-t border-slate-light pt-4">
-            <strong className="text-ivory-dark text-sm">Extracted Ranking:</strong>
-            <ol className="list-decimal list-inside mt-2 text-sm text-cloud-light">
-              {rankings[activeTab].parsed_ranking.map((label, i) => (
-                <li key={i} className="py-0.5">
-                  {labelToModel && labelToModel[label]
-                    ? labelToModel[label].split('/')[1] || labelToModel[label]
-                    : label}
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
+          rankings[activeTab].parsed_ranking.length > 0 && (
+            <div className="border-t border-slate-light pt-4">
+              <strong className="text-ivory-dark text-sm">Extracted Ranking:</strong>
+              <ol className="list-decimal list-inside mt-2 text-sm text-cloud-light">
+                {rankings[activeTab].parsed_ranking.map((label, i) => (
+                  <li key={i} className="py-0.5">
+                    {labelToModel && labelToModel[label]
+                      ? labelToModel[label].split('/')[1] || labelToModel[label]
+                      : label}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
       </div>
 
       {aggregateRankings && aggregateRankings.length > 0 && (
