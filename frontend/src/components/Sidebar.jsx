@@ -1,9 +1,82 @@
+import { Settings, Trash2 } from 'lucide-react';
+
+// Helper to categorize conversations by date
+function groupConversationsByDate(conversations) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today - 86400000);
+  const lastWeek = new Date(today - 7 * 86400000);
+
+  const groups = {
+    today: [],
+    yesterday: [],
+    lastWeek: [],
+    older: [],
+  };
+
+  conversations.forEach(conv => {
+    const convDate = new Date(conv.created_at);
+    const convDay = new Date(convDate.getFullYear(), convDate.getMonth(), convDate.getDate());
+
+    if (convDay >= today) {
+      groups.today.push(conv);
+    } else if (convDay >= yesterday) {
+      groups.yesterday.push(conv);
+    } else if (convDay >= lastWeek) {
+      groups.lastWeek.push(conv);
+    } else {
+      groups.older.push(conv);
+    }
+  });
+
+  return groups;
+}
+
 export default function Sidebar({
   conversations,
   currentConversationId,
   onSelectConversation,
   onNewConversation,
+  onDeleteConversation,
+  onOpenSettings,
 }) {
+  // Filter out empty conversations (no messages)
+  const filteredConversations = conversations.filter(c => c.message_count > 0);
+
+  // Group by date
+  const groups = groupConversationsByDate(filteredConversations);
+
+  const renderGroup = (convs, label) => {
+    if (convs.length === 0) return null;
+    return (
+      <>
+        <div className="conversation-group-label">{label}</div>
+        {convs.map((conv) => (
+          <div
+            key={conv.id}
+            className={`conversation-item ${conv.id === currentConversationId ? 'active' : ''}`}
+          >
+            <button
+              className="conversation-title"
+              onClick={() => onSelectConversation(conv.id)}
+            >
+              {conv.title || 'New Conversation'}
+            </button>
+            <button
+              className="conversation-delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteConversation(conv.id);
+              }}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </>
+    );
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -35,15 +108,17 @@ export default function Sidebar({
       </button>
 
       <div className="conversation-list">
-        {conversations.map((conv) => (
-          <button
-            key={conv.id}
-            className={`conversation-item ${conv.id === currentConversationId ? 'active' : ''}`}
-            onClick={() => onSelectConversation(conv.id)}
-          >
-            {conv.title || 'New Conversation'}
-          </button>
-        ))}
+        {renderGroup(groups.today, 'Today')}
+        {renderGroup(groups.yesterday, 'Yesterday')}
+        {renderGroup(groups.lastWeek, 'Last 7 days')}
+        {renderGroup(groups.older, 'Older')}
+      </div>
+
+      <div className="sidebar-footer">
+        <button className="settings-btn" onClick={onOpenSettings}>
+          <Settings size={18} />
+          <span>Settings</span>
+        </button>
       </div>
     </div>
   );

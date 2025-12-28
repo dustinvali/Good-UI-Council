@@ -1,13 +1,28 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import Settings from './components/Settings';
 import { api } from './api';
+
+const DEFAULT_SETTINGS = {
+  councilModels: [
+    'openai/gpt-4o',
+    'anthropic/claude-sonnet-4',
+    'google/gemini-2.5-flash',
+  ],
+  chairmanModel: 'google/gemini-2.5-flash',
+};
 
 function App() {
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('council-settings');
+    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+  });
 
   useEffect(() => {
     loadConversations();
@@ -46,7 +61,25 @@ function App() {
     setCurrentConversationId(id);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSaveSettings = (newSettings) => {
+    setSettings(newSettings);
+    localStorage.setItem('council-settings', JSON.stringify(newSettings));
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (currentConversationId === id) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
+
+  const handleSendMessage = async (content, attachments = []) => {
     try {
       let activeConversationId = currentConversationId;
 
@@ -138,6 +171,10 @@ function App() {
             setIsLoading(false);
             break;
         }
+      }, {
+        councilModels: settings.councilModels,
+        chairmanModel: settings.chairmanModel,
+        attachments,
       });
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -152,11 +189,19 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+      />
+      <Settings
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        onSave={handleSaveSettings}
       />
     </div>
   );

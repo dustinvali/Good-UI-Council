@@ -1,24 +1,72 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+def build_message_content(text: str, attachments: List[Dict[str, Any]] = None) -> Any:
+    """
+    Build message content with optional attachments.
+
+    For multimodal models, includes images as base64. Text files are included in the text content.
+
+    Args:
+        text: The text message
+        attachments: List of attachment dicts with name, type, isImage, content
+
+    Returns:
+        Either a string or a list of content parts for multimodal
+    """
+    if not attachments:
+        return text
+
+    # Separate images and text files
+    images = [a for a in attachments if a.get('isImage')]
+    text_files = [a for a in attachments if not a.get('isImage')]
+
+    # Add text file contents to the message text
+    if text_files:
+        file_context = "\n\n--- Attached Files ---\n"
+        for f in text_files:
+            file_context += f"\n[{f['name']}]\n{f['content']}\n"
+        text = text + file_context
+
+    # If no images, return as plain text
+    if not images:
+        return text
+
+    # Build multimodal content array
+    content = [{"type": "text", "text": text}]
+    for img in images:
+        # Extract base64 data from data URL
+        # Format: data:image/png;base64,xxxx
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": img['content']}
+        })
+
+    return content
+
+
+async def stage1_collect_responses(user_query: str, council_models: Optional[List[str]] = None, attachments: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
     Args:
         user_query: The user's question
+        council_models: List of models to use (defaults to COUNCIL_MODELS)
+        attachments: Optional list of file attachments
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    models = council_models or COUNCIL_MODELS
+    content = build_message_content(user_query, attachments)
+    messages = [{"role": "user", "content": content}]
 
     # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    responses = await query_models_parallel(models, messages)
 
     # Format results
     stage1_results = []
@@ -34,7 +82,8 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
 
 async def stage2_collect_rankings(
     user_query: str,
-    stage1_results: List[Dict[str, Any]]
+    stage1_results: List[Dict[str, Any]],
+    council_models: Optional[List[str]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -42,10 +91,12 @@ async def stage2_collect_rankings(
     Args:
         user_query: The original user query
         stage1_results: Results from Stage 1
+        council_models: List of models to use (defaults to COUNCIL_MODELS)
 
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
+    models = council_models or COUNCIL_MODELS
     # Create anonymized labels for responses (Response A, Response B, etc.)
     labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
 
@@ -95,7 +146,7 @@ Now provide your evaluation and ranking:"""
     messages = [{"role": "user", "content": ranking_prompt}]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    responses = await query_models_parallel(models, messages)
 
     # Format results
     stage2_results = []
@@ -115,7 +166,8 @@ Now provide your evaluation and ranking:"""
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]]
+    stage2_results: List[Dict[str, Any]],
+    chairman_model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -124,10 +176,12 @@ async def stage3_synthesize_final(
         user_query: The original user query
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
+        chairman_model: The model to use for synthesis (defaults to CHAIRMAN_MODEL)
 
     Returns:
         Dict with 'model' and 'response' keys
     """
+    model = chairman_model or CHAIRMAN_MODEL
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
         f"Model: {result['model']}\nResponse: {result['response']}"
@@ -159,17 +213,17 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     messages = [{"role": "user", "content": chairman_prompt}]
 
     # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+    response = await query_model(model, messages)
 
     if response is None:
         # Fallback if chairman fails
         return {
-            "model": CHAIRMAN_MODEL,
+            "model": model,
             "response": "Error: Unable to generate final synthesis."
         }
 
     return {
-        "model": CHAIRMAN_MODEL,
+        "model": model,
         "response": response.get('content', '')
     }
 
