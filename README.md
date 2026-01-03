@@ -12,11 +12,15 @@ In a bit more detail, here is what happens when you submit a query:
 
 ## What's Different in This Fork
 
-This is a fork of [karpathy/llm-council](https://github.com/karpathy/llm-council) with an improved UI and some quality-of-life changes:
+This is a fork of [karpathy/llm-council](https://github.com/karpathy/llm-council).
 
-- Cleaner, more polished interface
-- Simplified setup with `setup.sh` and `start.sh` scripts
-- Various UI/UX improvements
+I started to use this a lot, and I found it to be a useful tool. I found the UI to be a bit clunky, so I made some changes to make it easier for me to use. Also, I added some features like file upload and settings to change models. 
+
+I thought someone else might find it useful, so I made this fork.
+
+*Original UI:*
+
+![original](original-council.jpg)
 
 ## Setup
 
