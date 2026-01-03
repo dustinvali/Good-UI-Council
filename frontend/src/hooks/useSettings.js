@@ -18,15 +18,22 @@ export function useSettings() {
     const [settings, setSettings] = useState(() => {
         try {
             const saved = localStorage.getItem(STORAGE_KEY);
-            return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+            if (saved) {
+                // Merge saved settings with defaults to ensure all properties exist
+                const parsed = JSON.parse(saved);
+                return { ...DEFAULT_SETTINGS, ...parsed };
+            }
+            return DEFAULT_SETTINGS;
         } catch {
             return DEFAULT_SETTINGS;
         }
     });
 
     const saveSettings = useCallback((newSettings) => {
-        setSettings(newSettings);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newSettings));
+        // Merge with defaults to ensure all required properties exist
+        const merged = { ...DEFAULT_SETTINGS, ...newSettings };
+        setSettings(merged);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
     }, []);
 
     return { settings, saveSettings, DEFAULT_SETTINGS };

@@ -2,7 +2,7 @@
  * Main App component.
  * Composes layout and coordinates state via custom hooks.
  */
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import Settings from './components/Settings';
@@ -13,8 +13,12 @@ import { api } from './api';
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [error, setError] = useState(null);
   const { settings, saveSettings } = useSettings();
-  const { sendMessage } = useMessageStream();
+  const { sendMessage, cancelRequest } = useMessageStream();
+
+  // Track the active conversation ID for streaming callbacks
+  const activeConversationRef = useRef(null);
 
   const {
     conversations,
@@ -29,9 +33,29 @@ function App() {
     selectConversation,
     newConversation,
     deleteConversation,
+    skipNextLoad,
   } = useConversations();
 
+  // Wrapper for selectConversation that cancels any in-flight request
+  const handleSelectConversation = useCallback((id) => {
+    cancelRequest();
+    setIsLoading(false);
+    activeConversationRef.current = null;
+    selectConversation(id);
+  }, [cancelRequest, setIsLoading, selectConversation]);
+
+  // Wrapper for newConversation that cancels any in-flight request
+  const handleNewConversation = useCallback(() => {
+    cancelRequest();
+    setIsLoading(false);
+    activeConversationRef.current = null;
+    newConversation();
+  }, [cancelRequest, setIsLoading, newConversation]);
+
   const handleSendMessage = async (content, attachments = []) => {
+    // Clear any previous error
+    setError(null);
+
     try {
       let activeConversationId = currentConversationId;
 
@@ -42,11 +66,16 @@ function App() {
           { id: newConv.id, created_at: newConv.created_at, title: 'New Conversation', message_count: 0 },
           ...prev
         ]);
+        // Skip the auto-load since we're about to stream updates
+        skipNextLoad();
         setCurrentConversationId(newConv.id);
         setCurrentConversation({ ...newConv, messages: [] });
       }
 
       setIsLoading(true);
+
+      // Track this conversation for callback guards
+      activeConversationRef.current = activeConversationId;
 
       const userMessage = { role: 'user', content };
       setCurrentConversation(prev => ({
@@ -67,78 +96,147 @@ function App() {
         messages: [...prev.messages, assistantMessage],
       }));
 
+      // Helper to guard callbacks - only update if still on the same conversation
+      const guardedUpdate = (updateFn) => {
+        if (activeConversationRef.current !== activeConversationId) return;
+        setCurrentConversation(updateFn);
+      };
+
       await sendMessage({
         conversationId: activeConversationId,
         content,
         attachments,
         settings,
         onStage1Start: () => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].loading.stage1 = true;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                loading: { ...(lastMsg.loading || {}), stage1: true }
+              };
+            }
             return { ...prev, messages };
           });
         },
         onStage1Complete: (data) => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].stage1 = data;
-            messages[messages.length - 1].loading.stage1 = false;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                stage1: data,
+                loading: { ...(lastMsg.loading || {}), stage1: false }
+              };
+            }
             return { ...prev, messages };
           });
         },
         onStage2Start: () => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].loading.stage2 = true;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                loading: { ...(lastMsg.loading || {}), stage2: true }
+              };
+            }
             return { ...prev, messages };
           });
         },
         onStage2Complete: (data) => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].stage2 = data;
-            messages[messages.length - 1].loading.stage2 = false;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                stage2: data,
+                loading: { ...(lastMsg.loading || {}), stage2: false }
+              };
+            }
             return { ...prev, messages };
           });
         },
         onStage3Start: () => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].loading.stage3 = true;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                loading: { ...(lastMsg.loading || {}), stage3: true }
+              };
+            }
             return { ...prev, messages };
           });
         },
         onStage3Complete: (data) => {
-          setCurrentConversation(prev => {
+          guardedUpdate(prev => {
+            if (!prev?.messages?.length) return prev;
             const messages = [...prev.messages];
-            messages[messages.length - 1].stage3 = data;
-            messages[messages.length - 1].loading.stage3 = false;
+            const lastIdx = messages.length - 1;
+            const lastMsg = messages[lastIdx];
+            if (lastMsg?.role === 'assistant') {
+              messages[lastIdx] = {
+                ...lastMsg,
+                stage3: data,
+                loading: { ...(lastMsg.loading || {}), stage3: false }
+              };
+            }
             return { ...prev, messages };
           });
         },
+        onTitleComplete: (title) => {
+          if (activeConversationRef.current !== activeConversationId) return;
+          // Update the current conversation's title
+          setCurrentConversation(prev => prev ? { ...prev, title } : prev);
+          // Update the conversation in the sidebar list
+          setConversations(prev => prev.map(conv =>
+            conv.id === activeConversationId ? { ...conv, title } : conv
+          ));
+        },
         onComplete: () => {
+          if (activeConversationRef.current !== activeConversationId) return;
           loadConversations();
           setIsLoading(false);
         },
         onError: (message) => {
+          if (activeConversationRef.current !== activeConversationId) return;
           console.error('Stream error:', message);
+          setError(message || 'An error occurred while processing your request.');
           setIsLoading(false);
         },
       });
     } catch (error) {
       console.error('Failed to send message:', error);
+      setError(error.message || 'Failed to send message. Please try again.');
       setIsLoading(false);
     }
   };
+
+  const dismissError = () => setError(null);
 
   return (
     <div className="app">
       <Sidebar
         conversations={conversations}
         currentConversationId={currentConversationId}
-        onSelectConversation={selectConversation}
-        onNewConversation={newConversation}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={handleNewConversation}
         onDeleteConversation={deleteConversation}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -146,6 +244,8 @@ function App() {
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+        error={error}
+        onDismissError={dismissError}
       />
       <Settings
         isOpen={settingsOpen}

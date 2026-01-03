@@ -8,8 +8,18 @@ import CodeBlock from '../common/CodeBlock';
 export default function AssistantMessage({ message }) {
     const { loading, stage1, stage2, stage3 } = message;
 
+    // Show initial loading if no stages have started or completed yet
+    const isInitialLoading = !stage1 && !stage2 && !stage3 &&
+        !loading?.stage1 && !loading?.stage2 && !loading?.stage3;
+
     return (
         <div className="assistant-message">
+            {isInitialLoading && (
+                <div className="stage-loading">
+                    <div className="spinner"></div>
+                    <span>Preparing response...</span>
+                </div>
+            )}
             {loading?.stage1 && (
                 <div className="stage-loading">
                     <div className="spinner"></div>

@@ -1,10 +1,13 @@
 /**
  * Custom hook for handling SSE message streaming.
  */
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { api } from '../api';
 
 export function useMessageStream() {
+    // Store the current AbortController to allow cancellation
+    const abortControllerRef = useRef(null);
+
     const sendMessage = useCallback(async ({
         conversationId,
         content,
@@ -16,9 +19,18 @@ export function useMessageStream() {
         onStage2Complete,
         onStage3Start,
         onStage3Complete,
+        onTitleComplete,
         onComplete,
         onError,
     }) => {
+        // Cancel any previous request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
+        // Create new AbortController for this request
+        abortControllerRef.current = new AbortController();
+
         await api.sendMessageStream(conversationId, content, (eventType, event) => {
             switch (eventType) {
                 case 'stage1_start':
@@ -39,19 +51,33 @@ export function useMessageStream() {
                 case 'stage3_complete':
                     onStage3Complete?.(event.data);
                     break;
+                case 'title_complete':
+                    onTitleComplete?.(event.data?.title);
+                    break;
                 case 'complete':
                     onComplete?.();
+                    abortControllerRef.current = null;
                     break;
                 case 'error':
                     onError?.(event.message);
+                    abortControllerRef.current = null;
                     break;
             }
         }, {
             councilModels: settings.councilModels,
             chairmanModel: settings.chairmanModel,
             attachments,
+            abortSignal: abortControllerRef.current.signal,
         });
     }, []);
 
-    return { sendMessage };
+    // Function to cancel the current request
+    const cancelRequest = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+    }, []);
+
+    return { sendMessage, cancelRequest };
 }

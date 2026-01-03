@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Dict, Any
 import uuid
 import json
@@ -11,14 +11,14 @@ import asyncio
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, CORS_ORIGINS, MAX_MESSAGE_LENGTH
 
 app = FastAPI(title="LLM Council API")
 
-# Enable CORS for local development
+# Enable CORS with explicit origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,6 +44,15 @@ class SendMessageRequest(BaseModel):
     council_models: List[str] = None
     chairman_model: str = None
     attachments: List[Attachment] = []
+
+    @field_validator('content')
+    @classmethod
+    def validate_content_length(cls, v):
+        if len(v) > MAX_MESSAGE_LENGTH:
+            raise ValueError(f'Message content exceeds maximum length of {MAX_MESSAGE_LENGTH} bytes')
+        if not v.strip():
+            raise ValueError('Message content cannot be empty')
+        return v
 
 
 class ConversationMetadata(BaseModel):
@@ -124,9 +133,25 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         title = await generate_conversation_title(request.content)
         storage.update_conversation_title(conversation_id, title)
 
+    # Get models from request or use defaults
+    council_models = request.council_models or COUNCIL_MODELS
+    chairman_model = request.chairman_model or CHAIRMAN_MODEL
+
+    # Convert attachments to dict format for council functions
+    attachments = [att.model_dump() for att in request.attachments] if request.attachments else []
+
+    # Get conversation history (excluding the message we just added)
+    conversation = storage.get_conversation(conversation_id)
+    # The last message is the one we just added, so exclude it
+    conversation_history = conversation["messages"][:-1] if conversation else []
+
     # Run the 3-stage council process
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        request.content
+        request.content,
+        council_models,
+        chairman_model,
+        attachments,
+        conversation_history
     )
 
     # Add assistant message with all stages
@@ -160,6 +185,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
+    # Get conversation history before adding the new message
+    conversation_history = conversation["messages"].copy()
+
     # Get models from request or use defaults
     council_models = request.council_models or COUNCIL_MODELS
     chairman_model = request.chairman_model or CHAIRMAN_MODEL
@@ -179,7 +207,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content, council_models, attachments)
+            stage1_results = await stage1_collect_responses(request.content, council_models, attachments, conversation_history)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
@@ -190,7 +218,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model)
+            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results, chairman_model, conversation_history)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started

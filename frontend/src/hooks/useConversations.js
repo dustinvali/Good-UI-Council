@@ -1,7 +1,7 @@
 /**
  * Custom hook for managing conversations state and operations.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../api';
 
 export function useConversations() {
@@ -9,6 +9,9 @@ export function useConversations() {
     const [currentConversationId, setCurrentConversationId] = useState(null);
     const [currentConversation, setCurrentConversation] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+
+    // Track if we should skip the next auto-load (used when creating new conversations)
+    const skipNextLoadRef = useRef(false);
 
     const loadConversations = useCallback(async () => {
         try {
@@ -50,14 +53,23 @@ export function useConversations() {
         }
     }, [currentConversationId]);
 
+    // Skip the next auto-load when creating a new conversation
+    const skipNextLoad = useCallback(() => {
+        skipNextLoadRef.current = true;
+    }, []);
+
     // Load conversations on mount
     useEffect(() => {
         loadConversations();
     }, [loadConversations]);
 
-    // Load conversation when ID changes
+    // Load conversation when ID changes (but skip if we just created it)
     useEffect(() => {
         if (currentConversationId) {
+            if (skipNextLoadRef.current) {
+                skipNextLoadRef.current = false;
+                return;
+            }
             loadConversation(currentConversationId);
         }
     }, [currentConversationId, loadConversation]);
@@ -75,5 +87,6 @@ export function useConversations() {
         selectConversation,
         newConversation,
         deleteConversation,
+        skipNextLoad,
     };
 }

@@ -85,51 +85,114 @@ export const api = {
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
-   * @param {object} options - Optional settings: { mode, councilModels, chairmanModel }
+   * @param {object} options - Optional settings: { mode, councilModels, chairmanModel, abortSignal }
    * @returns {Promise<void>}
    */
   async sendMessageStream(conversationId, content, onEvent, options = {}) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message/stream`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          content,
-          council_models: options.councilModels,
-          chairman_model: options.chairmanModel,
-          attachments: options.attachments || [],
-        }),
+    let response;
+
+    try {
+      response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/message/stream`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content,
+            council_models: options.councilModels,
+            chairman_model: options.chairmanModel,
+            attachments: options.attachments || [],
+          }),
+          signal: options.abortSignal,
+        }
+      );
+    } catch (fetchError) {
+      // Handle abort gracefully
+      if (fetchError.name === 'AbortError') {
+        console.log('Request was cancelled');
+        return;
       }
-    );
+      console.error('Network error:', fetchError);
+      onEvent('error', { message: 'Network error: Unable to connect to server' });
+      return;
+    }
 
     if (!response.ok) {
-      throw new Error('Failed to send message');
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error('Server error:', response.status, errorText);
+      onEvent('error', { message: `Server error: ${response.status}` });
+      return;
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
+    let receivedComplete = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+        // Append new chunk to buffer
+        buffer += decoder.decode(value, { stream: true });
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          try {
-            const event = JSON.parse(data);
-            onEvent(event.type, event);
-          } catch (e) {
-            console.error('Failed to parse SSE event:', e);
+        // Process complete lines (SSE events end with double newline)
+        const lines = buffer.split('\n');
+
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data.trim() === '') continue;
+
+            try {
+              const event = JSON.parse(data);
+              console.log('[SSE] Received event:', event.type, event);
+              onEvent(event.type, event);
+
+              if (event.type === 'complete') {
+                receivedComplete = true;
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE event:', data, e);
+            }
           }
         }
       }
+
+      // Process any remaining data in buffer
+      if (buffer.startsWith('data: ')) {
+        const data = buffer.slice(6);
+        if (data.trim()) {
+          try {
+            const event = JSON.parse(data);
+            onEvent(event.type, event);
+            if (event.type === 'complete') {
+              receivedComplete = true;
+            }
+          } catch (e) {
+            console.error('Failed to parse final SSE event:', data, e);
+          }
+        }
+      }
+
+      // If stream ended without a complete event, call error
+      if (!receivedComplete) {
+        onEvent('error', { message: 'Stream ended unexpectedly without completion' });
+      }
+    } catch (streamError) {
+      // Handle abort gracefully
+      if (streamError.name === 'AbortError') {
+        console.log('Stream was cancelled');
+        return;
+      }
+      console.error('Stream reading error:', streamError);
+      onEvent('error', { message: streamError.message || 'Stream reading failed' });
     }
   },
 };

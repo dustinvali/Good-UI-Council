@@ -49,7 +49,36 @@ def build_message_content(text: str, attachments: List[Dict[str, Any]] = None) -
     return content
 
 
-async def stage1_collect_responses(user_query: str, council_models: Optional[List[str]] = None, attachments: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def build_conversation_history(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    Convert stored conversation messages to LLM API format.
+
+    Args:
+        messages: List of stored messages (user messages have 'content',
+                  assistant messages have 'stage1', 'stage2', 'stage3')
+
+    Returns:
+        List of messages in LLM API format (role + content)
+    """
+    history = []
+    for msg in messages:
+        if msg["role"] == "user":
+            history.append({"role": "user", "content": msg["content"]})
+        elif msg["role"] == "assistant":
+            # Use the stage3 final synthesis as the assistant's response
+            stage3 = msg.get("stage3", {})
+            content = stage3.get("response", "")
+            if content:
+                history.append({"role": "assistant", "content": content})
+    return history
+
+
+async def stage1_collect_responses(
+    user_query: str,
+    council_models: Optional[List[str]] = None,
+    attachments: List[Dict[str, Any]] = None,
+    conversation_history: List[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
@@ -57,13 +86,19 @@ async def stage1_collect_responses(user_query: str, council_models: Optional[Lis
         user_query: The user's question
         council_models: List of models to use (defaults to COUNCIL_MODELS)
         attachments: Optional list of file attachments
+        conversation_history: Previous messages in the conversation (stored format)
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
     models = council_models or COUNCIL_MODELS
     content = build_message_content(user_query, attachments)
-    messages = [{"role": "user", "content": content}]
+
+    # Build messages array with conversation history
+    messages = []
+    if conversation_history:
+        messages = build_conversation_history(conversation_history)
+    messages.append({"role": "user", "content": content})
 
     # Query all models in parallel
     responses = await query_models_parallel(models, messages)
@@ -167,7 +202,8 @@ async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    chairman_model: Optional[str] = None
+    chairman_model: Optional[str] = None,
+    conversation_history: List[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -177,6 +213,7 @@ async def stage3_synthesize_final(
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
         chairman_model: The model to use for synthesis (defaults to CHAIRMAN_MODEL)
+        conversation_history: Previous messages in the conversation (stored format)
 
     Returns:
         Dict with 'model' and 'response' keys
@@ -193,9 +230,20 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
+    # Build conversation context if there's history
+    conversation_context = ""
+    if conversation_history:
+        history = build_conversation_history(conversation_history)
+        if history:
+            conversation_context = "CONVERSATION HISTORY:\n"
+            for msg in history:
+                role = "User" if msg["role"] == "user" else "Assistant"
+                conversation_context += f"{role}: {msg['content']}\n\n"
+            conversation_context += "---\n\n"
+
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
-Original Question: {user_query}
+{conversation_context}Current Question: {user_query}
 
 STAGE 1 - Individual Responses:
 {stage1_text}
@@ -203,10 +251,11 @@ STAGE 1 - Individual Responses:
 STAGE 2 - Peer Rankings:
 {stage2_text}
 
-Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
+Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's question. Consider:
 - The individual responses and their insights
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
+- The conversation history for context (if any)
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
@@ -240,26 +289,27 @@ def parse_ranking_from_text(ranking_text: str) -> List[str]:
     """
     import re
 
-    # Look for "FINAL RANKING:" section
-    if "FINAL RANKING:" in ranking_text:
-        # Extract everything after "FINAL RANKING:"
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            # Try to extract numbered list format (e.g., "1. Response A")
-            # This pattern looks for: number, period, optional space, "Response X"
-            numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
-            if numbered_matches:
-                # Extract just the "Response X" part
-                return [re.search(r'Response [A-Z]', m).group() for m in numbered_matches]
+    # Look for "FINAL RANKING:" section (case-insensitive)
+    ranking_text_upper = ranking_text.upper()
+    if "FINAL RANKING:" in ranking_text_upper:
+        # Find the position and extract everything after
+        pos = ranking_text_upper.find("FINAL RANKING:")
+        ranking_section = ranking_text[pos + len("FINAL RANKING:"):]
 
-            # Fallback: Extract all "Response X" patterns in order
-            matches = re.findall(r'Response [A-Z]', ranking_section)
-            return matches
+        # Try to extract numbered list format (e.g., "1. Response A")
+        numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section, re.IGNORECASE)
+        if numbered_matches:
+            # Extract just the "Response X" part and normalize
+            return [re.search(r'Response [A-Z]', m, re.IGNORECASE).group().title() for m in numbered_matches]
 
-    # Fallback: try to find any "Response X" patterns in order
-    matches = re.findall(r'Response [A-Z]', ranking_text)
-    return matches
+        # Fallback: Extract all "Response X" patterns in the ranking section only
+        matches = re.findall(r'Response [A-Z]', ranking_section, re.IGNORECASE)
+        if matches:
+            return [m.title() for m in matches]
+
+    # If no FINAL RANKING section found, return empty list
+    # Models are explicitly instructed to include this section
+    return []
 
 
 def calculate_aggregate_rankings(
@@ -309,6 +359,10 @@ def calculate_aggregate_rankings(
     return aggregate
 
 
+# Model used for title generation (fast and cheap)
+TITLE_GENERATION_MODEL = "google/gemini-2.5-flash"
+
+
 async def generate_conversation_title(user_query: str) -> str:
     """
     Generate a short title for a conversation based on the first user message.
@@ -328,8 +382,8 @@ Title:"""
 
     messages = [{"role": "user", "content": title_prompt}]
 
-    # Use gemini-2.5-flash for title generation (fast and cheap)
-    response = await query_model("google/gemini-2.5-flash", messages, timeout=30.0)
+    # Use a fast model for title generation
+    response = await query_model(TITLE_GENERATION_MODEL, messages, timeout=30.0)
 
     if response is None:
         # Fallback to a generic title
@@ -347,18 +401,28 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def run_full_council(
+    user_query: str,
+    council_models: Optional[List[str]] = None,
+    chairman_model: Optional[str] = None,
+    attachments: List[Dict[str, Any]] = None,
+    conversation_history: List[Dict[str, Any]] = None
+) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
     Args:
         user_query: The user's question
+        council_models: Optional list of models to use for the council
+        chairman_model: Optional model to use for the chairman
+        attachments: Optional list of file attachments
+        conversation_history: Previous messages in the conversation (stored format)
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    stage1_results = await stage1_collect_responses(user_query, council_models, attachments, conversation_history)
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -368,7 +432,7 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         }, {}
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results, council_models)
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
@@ -377,7 +441,9 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     stage3_result = await stage3_synthesize_final(
         user_query,
         stage1_results,
-        stage2_results
+        stage2_results,
+        chairman_model,
+        conversation_history
     )
 
     # Prepare metadata
